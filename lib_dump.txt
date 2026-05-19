@@ -1,0 +1,1126 @@
+﻿===== C:\Users\Jatin\Desktop\turbos-medifi\lib\groq.ts =====
+// lib/groq.ts
+
+import Groq from 'groq-sdk'
+
+export const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY
+})
+
+export const MODELS = {
+  // Use 8b for NER and light tasks â€” much cheaper on TPD
+  FAST: 'llama-3.1-8b-instant',
+
+  // Use for summaries and complex reasoning
+  SMART: 'llama-3.3-70b-versatile',
+
+  // Fallback chain when rate limited
+  FALLBACKS: [
+    'llama-3.1-8b-instant',   // cheapest, fastest
+    'gemma2-9b-it',           // Google's model, separate quota
+    'mixtral-8x7b-32768',     // Mistral, separate quota
+  ],
+
+  MIXTRAL: 'mixtral-8x7b-32768',
+  SMALL: 'gemma2-9b-it',
+}
+
+/**
+ * Call Groq with automatic model fallback on 429 rate limit.
+ * Tries SMART first, then each model in FALLBACKS.
+ */
+export async function groqWithFallback(
+  params: Omit<Parameters<typeof groq.chat.completions.create>[0], 'model'>,
+  preferSmart = true
+): Promise<Awaited<ReturnType<typeof groq.chat.completions.create>>> {
+  const modelsToTry = preferSmart
+    ? [MODELS.SMART, ...MODELS.FALLBACKS]
+    : [MODELS.FAST, ...MODELS.FALLBACKS]
+
+  let lastError: any
+  for (const model of modelsToTry) {
+    try {
+      console.log(`Trying Groq model: ${model}`)
+      const response = await groq.chat.completions.create({ ...params, model })
+      return response
+    } catch (err: any) {
+      if (err?.status === 429) {
+        console.warn(`Rate limited on ${model}, trying next fallback...`)
+        lastError = err
+        continue
+      }
+      throw err // non-429 errors bubble up immediately
+    }
+  }
+  throw lastError // all models exhausted
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\prisma.ts =====
+// lib/prisma.ts
+
+import { PrismaClient } from '@prisma/client'
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined
+}
+
+export const prisma = globalForPrisma.prisma ?? new PrismaClient()
+
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\sarvam.ts =====
+// lib/sarvam.ts
+// bulbul:v2 valid speakers: anushka, abhilash, manisha, vidya, arya, karun, hitesh
+// meera/rupali are bulbul:v1 only â€” do NOT use with v2
+
+export class SarvamClient {
+  private apiKey: string
+  private baseUrl = 'https://api.sarvam.ai'
+
+  constructor(apiKey: string) {
+    this.apiKey = apiKey
+  }
+
+  // Speech to Text â€” saarika:v2.5
+  async transcribe(audioBlob: Blob, language: string): Promise<string> {
+    const formData = new FormData()
+    formData.append('file', audioBlob, 'audio.webm')
+    formData.append('language_code', language)
+    formData.append('model', 'saarika:v2.5')
+    formData.append('with_timestamps', 'false')
+    formData.append('with_disfluencies', 'false')
+
+    const response = await fetch(`${this.baseUrl}/speech-to-text`, {
+      method: 'POST',
+      headers: { 'api-subscription-key': this.apiKey },
+      body: formData
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error('STT error:', response.status, error)
+      throw new Error(`Transcription failed (${response.status}): ${error}`)
+    }
+
+    const data = await response.json()
+    return data.transcript || ''
+  }
+
+  // Translation â€” mayura:v1
+  async translate(text: string, sourceLang: string, targetLang: string = 'en-IN'): Promise<string> {
+    if (!text || text.trim().length === 0) return text
+
+    const response = await fetch(`${this.baseUrl}/translate`, {
+      method: 'POST',
+      headers: {
+        'api-subscription-key': this.apiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        input: text,
+        source_language_code: sourceLang,
+        target_language_code: targetLang,
+        speaker_gender: 'Male',
+        mode: 'formal',
+        model: 'mayura:v1',
+        enable_preprocessing: false
+      })
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error('Translation error:', response.status, error)
+      throw new Error(`Translation failed (${response.status}): ${error}`)
+    }
+
+    const data = await response.json()
+    return data.translated_text || text
+  }
+
+  // Text to Speech â€” bulbul:v2
+  // Valid speakers: anushka (f), abhilash (m), manisha (f), vidya (f), arya (f), karun (m), hitesh (m)
+  async textToSpeech(
+    text: string,
+    language: string,
+    options?: { speaker?: string; pitch?: number; pace?: number; loudness?: number }
+  ): Promise<string> {
+    const truncated = text.trim().substring(0, 490)
+
+    const response = await fetch(`${this.baseUrl}/text-to-speech`, {
+      method: 'POST',
+      headers: {
+        'api-subscription-key': this.apiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        inputs: [truncated],
+        target_language_code: language,
+        speaker: options?.speaker || 'anushka',  // âœ… valid v2 speaker
+        pitch: options?.pitch ?? 0,
+        pace: options?.pace ?? 1.0,
+        loudness: options?.loudness ?? 1.5,
+        speech_sample_rate: 22050,
+        enable_preprocessing: true,
+        model: 'bulbul:v2'
+      })
+    })
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error('TTS error:', response.status, error)
+      throw new Error(`TTS failed (${response.status}): ${error}`)
+    }
+
+    const data = await response.json()
+    return data.audios?.[0] || ''
+  }
+
+  static convertLanguageCode(code: 'ENGLISH' | 'HINDI' | 'KANNADA'): string {
+    return { ENGLISH: 'en-IN', HINDI: 'hi-IN', KANNADA: 'kn-IN' }[code] || 'en-IN'
+  }
+
+  static getLanguageName(code: string): string {
+    const map: Record<string, string> = {
+      'en-IN': 'English', 'hi-IN': 'Hindi', 'kn-IN': 'Kannada',
+      'ta-IN': 'Tamil', 'te-IN': 'Telugu'
+    }
+    return map[code] || code
+  }
+}
+
+export const sarvam = new SarvamClient(process.env.SARVAM_API_KEY!)
+
+export const LANGUAGE_CODES = {
+  ENGLISH: 'en-IN',
+  HINDI: 'hi-IN',
+  KANNADA: 'kn-IN'
+} as const
+
+export type SupportedLanguage = keyof typeof LANGUAGE_CODES
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\utils.ts =====
+// lib/utils.ts
+
+import { type ClassValue, clsx } from "clsx"
+import { twMerge } from "tailwind-merge"
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs))
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\auth\jwt.ts =====
+// lib/auth/jwt.ts
+
+import jwt from 'jsonwebtoken'
+
+const SECRET = process.env.NEXTAUTH_SECRET!
+
+export interface TokenPayload {
+  userId: string
+  role: string
+  department?: string
+}
+
+export function signToken(payload: TokenPayload): string {
+  return jwt.sign(payload, SECRET, { expiresIn: '8h' })
+}
+
+export function verifyToken(token: string): TokenPayload {
+  return jwt.verify(token, SECRET) as TokenPayload
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\hooks\useCallScheduler.ts =====
+// lib/hooks/useCallScheduler.ts
+// Runs in the browser every minute while the app is open.
+// Fires scheduled appointment calls and medication reminder calls at the right IST time.
+// No Vercel Cron, no external service needed.
+
+'use client'
+
+import { useEffect, useRef } from 'react'
+
+export function useCallScheduler() {
+  const lastFiredMinute = useRef<string>('')
+
+  useEffect(() => {
+    const tick = async () => {
+      // Get current IST HH:MM
+      const nowIST = new Date().toLocaleTimeString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).slice(0, 5) // "09:47"
+
+      // Deduplicate â€” only run once per minute
+      if (nowIST === lastFiredMinute.current) return
+      lastFiredMinute.current = nowIST
+
+      try {
+        const res = await fetch('/api/cron/scheduled-calls', {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${process.env.NEXT_PUBLIC_CRON_SECRET || 'local'}`,
+          },
+        })
+        const data = await res.json()
+        if (data.fired > 0) {
+          console.log(`[Scheduler] ${data.fired} call(s) fired at IST ${nowIST}`, data.results)
+        }
+      } catch (err) {
+        console.error('[Scheduler] tick failed:', err)
+      }
+    }
+
+    // Run immediately on mount, then every 30 seconds
+    // (30s interval means we never miss a minute even if the tab was slightly idle)
+    tick()
+    const id = setInterval(tick, 30_000)
+    return () => clearInterval(id)
+  }, [])
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\hooks\useSessionPolling.ts =====
+// lib/hooks/useSessionPolling.ts
+
+import { useEffect, useState } from 'react'
+
+export function useSessionPolling(sessionId: string, interval = 3000) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchSession = async () => {
+      try {
+        const res = await fetch(`/api/session/${sessionId}`)
+        const session = await res.json()
+        setData(session)
+        setLoading(false)
+      } catch (error) {
+        console.error('Polling error:', error)
+      }
+    }
+
+    fetchSession()
+    const intervalId = setInterval(fetchSession, interval)
+
+    return () => clearInterval(intervalId)
+  }, [sessionId, interval])
+
+  return { data, loading }
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\hooks\useSessionStream.ts =====
+// lib/hooks/useSessionStream.ts
+
+import { useEffect, useState } from 'react'
+
+interface SessionUpdate {
+  transcript?: string
+  translatedText?: string
+  extractedData?: any
+  nerEntities?: any
+  finalReport?: string
+  updatedAt?: string
+}
+
+export function useSessionStream(sessionId: string) {
+  const [data, setData] = useState<SessionUpdate | null>(null)
+  const [isConnected, setIsConnected] = useState(false)
+
+  useEffect(() => {
+    const eventSource = new EventSource(`/api/session/${sessionId}/stream`)
+
+    eventSource.onopen = () => {
+      setIsConnected(true)
+      console.log('SSE Connected')
+    }
+
+    eventSource.onmessage = (event) => {
+      try {
+        const update = JSON.parse(event.data)
+        setData(update)
+      } catch (error) {
+        console.error('Parse error:', error)
+      }
+    }
+
+    eventSource.onerror = (error) => {
+      console.error('SSE Error:', error)
+      setIsConnected(false)
+      eventSource.close()
+    }
+
+    return () => {
+      eventSource.close()
+      setIsConnected(false)
+    }
+  }, [sessionId])
+
+  return { data, isConnected }
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\huggingface\ner.ts =====
+// lib/huggingface/ner.ts
+
+export interface MedicalEntities {
+  symptoms: string[]
+  medications: string[]
+  diseases: string[]
+  procedures: string[]
+  bodyParts: string[]
+  severity: string[]
+  duration: string[]
+  frequency: string[]
+}
+
+export interface HuggingFaceEntity {
+  entity_group: string
+  score: number
+  word: string
+  start: number
+  end: number
+}
+
+// Phrases that look like duration but are NOT real time references
+const INVALID_DURATION_PHRASES = [
+  'after a',
+  'after a while',
+  'a while',
+  'while',
+  'after',
+  'later',
+  'soon',
+  'once',
+]
+
+function getNegatedSpans(text: string): Array<{ start: number; end: number }> {
+  const negationPatterns = [
+    /\bno\s+\w+/gi,
+    /\bnot\s+\w+/gi,
+    /\bwithout\s+\w+/gi,
+    /\bdenies\s+\w+/gi,
+    /\bno\s+history\s+of\s+\w+/gi,
+    /\bnot\s+having\s+\w+/gi,
+    /\bdoes\s+not\s+have\s+\w+/gi,
+  ]
+  const spans: Array<{ start: number; end: number }> = []
+  for (const pattern of negationPatterns) {
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      spans.push({ start: match.index, end: match.index + match[0].length + 30 })
+    }
+  }
+  return spans
+}
+
+function isNegated(
+  entity: HuggingFaceEntity,
+  negatedSpans: Array<{ start: number; end: number }>
+): boolean {
+  return negatedSpans.some(
+    span => entity.start >= span.start && entity.start <= span.end
+  )
+}
+
+function mergeSubwordEntities(entities: HuggingFaceEntity[]): HuggingFaceEntity[] {
+  if (entities.length === 0) return []
+
+  const merged: HuggingFaceEntity[] = []
+  let current = { ...entities[0] }
+
+  for (let i = 1; i < entities.length; i++) {
+    const next = entities[i]
+    const isSubword = next.word.startsWith('##')
+    const isAdjacent =
+      next.entity_group === current.entity_group && next.start === current.end
+
+    if (isSubword || isAdjacent) {
+      current.word += next.word.startsWith('##') ? next.word.slice(2) : next.word
+      current.end = next.end
+      current.score = Math.max(current.score, next.score)
+    } else {
+      merged.push(current)
+      current = { ...next }
+    }
+  }
+  merged.push(current)
+  return merged
+}
+
+export function hasSubwordFragments(entities: MedicalEntities): boolean {
+  const allWords = Object.values(entities).flat()
+  return allWords.some(
+    word => word.startsWith('##') || (word.length <= 2 && /^[a-z]+$/i.test(word))
+  )
+}
+
+function deduplicateSubstrings(arr: string[]): string[] {
+  return arr.filter(
+    word => !arr.some(other => other !== word && other.includes(word))
+  )
+}
+
+function isValidDuration(word: string): boolean {
+  const lower = word.toLowerCase().trim()
+  // Must be rejected if it matches any invalid phrase
+  if (INVALID_DURATION_PHRASES.includes(lower)) return false
+  // Must contain a time word or number to be valid
+  const timeWords = /\b(day|days|week|weeks|hour|hours|month|months|morning|night|yesterday|ago|since|for)\b/i
+  const hasNumber = /\d/.test(word)
+  const hasTimeWord = timeWords.test(word)
+  return hasNumber || hasTimeWord
+}
+
+export async function extractMedicalEntitiesHF(text: string): Promise<MedicalEntities> {
+  const apiKey = process.env.HUGGINGFACE_API_KEY
+  if (!apiKey) {
+    console.error('Hugging Face API key not found')
+    return getEmptyEntities()
+  }
+
+  const negatedSpans = getNegatedSpans(text)
+
+  try {
+    const response = await fetch(
+      'https://router.huggingface.co/hf-inference/models/d4data/biomedical-ner-all',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          inputs: text,
+          parameters: { aggregation_strategy: 'simple' },
+        }),
+      }
+    )
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error(`Hugging Face API error (${response.status}):`, error)
+      if (response.status === 503) {
+        console.log('HF model is loading, retrying in 10s...')
+        await new Promise(resolve => setTimeout(resolve, 10_000))
+        return extractMedicalEntitiesHF(text)
+      }
+      return getEmptyEntities()
+    }
+
+    const raw = await response.json()
+
+    let entities: HuggingFaceEntity[] = []
+    if (Array.isArray(raw)) {
+      entities = raw
+    } else if (raw && typeof raw === 'object') {
+      const candidate = Object.values(raw).find(v => Array.isArray(v))
+      if (candidate) entities = candidate as HuggingFaceEntity[]
+    }
+
+    const positiveEntities = entities.filter(e => !isNegated(e, negatedSpans))
+    const mergedEntities = mergeSubwordEntities(positiveEntities)
+    const result = mapEntitiesToStructure(mergedEntities)
+
+    // Deduplicate substrings
+    for (const key of Object.keys(result) as Array<keyof MedicalEntities>) {
+      result[key] = deduplicateSubstrings(result[key])
+    }
+
+    // Filter out invalid duration phrases
+    result.duration = result.duration.filter(isValidDuration)
+
+    return result
+
+  } catch (error) {
+    console.error('Hugging Face NER error:', error)
+    return getEmptyEntities()
+  }
+}
+
+function mapEntitiesToStructure(entities: HuggingFaceEntity[]): MedicalEntities {
+  const result: MedicalEntities = getEmptyEntities()
+
+  const mappings: Record<string, keyof MedicalEntities> = {
+    'Sign_symptom':          'symptoms',
+    'SYMPTOM':               'symptoms',
+    'SIGN':                  'symptoms',
+    'Medication':            'medications',
+    'DRUG':                  'medications',
+    'CHEMICAL':              'medications',
+    'Drug':                  'medications',
+    'Disease_disorder':      'diseases',
+    'DISEASE':               'diseases',
+    'CONDITION':             'diseases',
+    'Diagnostic_procedure':  'procedures',
+    'Therapeutic_procedure': 'procedures',
+    'PROCEDURE':             'procedures',
+    'TREATMENT':             'procedures',
+    'Lab_value':             'procedures',
+    'Biological_structure':  'bodyParts',
+    'ANATOMY':               'bodyParts',
+    'BODY_PART':             'bodyParts',
+    'Severity':              'severity',
+    'SEVERITY':              'severity',
+    'Duration':              'duration',
+    'DATE':                  'duration',
+    'TIME':                  'duration',
+    'Frequency':             'frequency',
+    'FREQUENCY':             'frequency',
+  }
+
+  for (const entity of entities) {
+    const category = mappings[entity.entity_group]
+    if (category && entity.score > 0.5) {
+      const word = entity.word.replace(/^##/, '').trim()
+      if (word.length > 1 && !result[category].includes(word)) {
+        result[category].push(word)
+      }
+    }
+  }
+
+  return result
+}
+
+function getEmptyEntities(): MedicalEntities {
+  return {
+    symptoms:    [],
+    medications: [],
+    diseases:    [],
+    procedures:  [],
+    bodyParts:   [],
+    severity:    [],
+    duration:    [],
+    frequency:   [],
+  }
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\middleware\audit.ts =====
+// lib/middleware/audit.ts
+
+import { prisma } from '@/lib/prisma'
+import { AuditAction } from '@prisma/client'
+
+interface AuditLogData {
+  userId: string
+  action: AuditAction
+  resource?: string
+  details?: any
+  ipAddress?: string
+  userAgent?: string
+}
+
+export async function createAuditLog(data: AuditLogData) {
+  try {
+    await prisma.auditLog.create({
+      data: {
+        userId: data.userId,
+        action: data.action,
+        resource: data.resource,
+        details: data.details,
+        ipAddress: data.ipAddress,
+        userAgent: data.userAgent,
+      }
+    })
+  } catch (error) {
+    console.error('Failed to create audit log:', error)
+  }
+}
+
+export async function getAuditLogs(filters?: {
+  userId?: string
+  action?: AuditAction
+  startDate?: Date
+  endDate?: Date
+  limit?: number
+  offset?: number
+}) {
+  const where: any = {}
+
+  if (filters?.userId) where.userId = filters.userId
+  if (filters?.action) where.action = filters.action
+  if (filters?.startDate || filters?.endDate) {
+    where.timestamp = {}
+    if (filters.startDate) where.timestamp.gte = filters.startDate
+    if (filters.endDate) where.timestamp.lte = filters.endDate
+  }
+
+  return await prisma.auditLog.findMany({
+    where,
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true
+        }
+      }
+    },
+    orderBy: {
+      timestamp: 'desc'
+    },
+    take: filters?.limit || 50,
+    skip: filters?.offset || 0
+  })
+}
+
+export async function getAuditLogsCount(filters?: {
+  userId?: string
+  action?: AuditAction
+  startDate?: Date
+  endDate?: Date
+}) {
+  const where: any = {}
+
+  if (filters?.userId) where.userId = filters.userId
+  if (filters?.action) where.action = filters.action
+  if (filters?.startDate || filters?.endDate) {
+    where.timestamp = {}
+    if (filters.startDate) where.timestamp.gte = filters.startDate
+    if (filters.endDate) where.timestamp.lte = filters.endDate
+  }
+
+  return await prisma.auditLog.count({ where })
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\ner\finance-ner.ts =====
+// lib/ner/finance-ner.ts
+
+import { groq, MODELS } from '@/lib/groq'
+
+export interface FinanceEntities {
+  income: string[]
+  expenses: string[]
+  investments: string[]
+  taxes: string[]
+  loans: string[]
+  insurance: string[]
+  goals: string[]
+  amounts: string[]
+  timeframes: string[]
+  taxSections: string[]
+}
+
+export async function extractFinanceEntities(text: string): Promise<FinanceEntities> {
+  const prompt = `You are a financial Named Entity Recognition (NER) system.
+
+CRITICAL RULES:
+- Extract ONLY entities that are POSITIVELY mentioned
+- If something is denied or negated ("no investments", "don't have insurance"), do NOT include it
+- Extract exact terms/values mentioned, not inferred ones
+- Keep amounts with their units (e.g., "5 lakhs", "â‚¹50,000", "15%")
+
+**Conversation to analyze:**
+${text}
+
+**Extract ONLY positively confirmed entities:**
+
+1. INCOME - Income sources mentioned (e.g., "salary", "freelance income", "rental income", "â‚¹8 lakhs per year")
+2. EXPENSES - Expenses mentioned (e.g., "rent 15000", "monthly EMI", "school fees")
+3. INVESTMENTS - Investment types mentioned (e.g., "PPF", "mutual funds", "FD", "stocks", "NPS")
+4. TAXES - Tax-related mentions (e.g., "income tax", "GST", "TDS", "tax regime", "ITR filing")
+5. LOANS - Loans/debts mentioned (e.g., "home loan", "car loan", "personal loan", "EMI")
+6. INSURANCE - Insurance mentioned (e.g., "life insurance", "health insurance", "term plan")
+7. GOALS - Financial goals mentioned (e.g., "buy house", "retirement", "child education", "emergency fund")
+8. AMOUNTS - Specific amounts mentioned (e.g., "â‚¹50,000", "5 lakhs", "20%", "â‚¹1.5 lakh limit")
+9. TIMEFRAMES - Time references (e.g., "this financial year", "next 5 years", "by 2030", "monthly")
+10. TAX_SECTIONS - Tax sections/deductions mentioned (e.g., "80C", "80D", "HRA", "Section 24", "10(14)")
+
+**Negation patterns to EXCLUDE:** "no X", "don't have X", "not investing in X", "haven't filed X", "no plans for X"
+
+Return ONLY valid JSON:
+{
+  "income": [],
+  "expenses": [],
+  "investments": [],
+  "taxes": [],
+  "loans": [],
+  "insurance": [],
+  "goals": [],
+  "amounts": [],
+  "timeframes": [],
+  "taxSections": []
+}`
+
+  try {
+    const response = await groq.chat.completions.create({
+      model: MODELS.SMART,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      max_tokens: 1000
+    })
+
+    const entities = JSON.parse(response.choices[0].message.content!)
+    return entities as FinanceEntities
+  } catch (error) {
+    console.error('Finance NER extraction failed:', error)
+    return {
+      income: [], expenses: [], investments: [], taxes: [],
+      loans: [], insurance: [], goals: [], amounts: [],
+      timeframes: [], taxSections: []
+    }
+  }
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\ner\medical-ner.ts =====
+// lib/ner/medical-ner.ts
+
+import { groq, MODELS } from '@/lib/groq'
+
+export interface MedicalEntities {
+  symptoms: string[]
+  medications: string[]
+  diseases: string[]
+  procedures: string[]
+  bodyParts: string[]
+  severity: string[]
+  duration: string[]
+  frequency: string[]
+}
+
+export async function extractMedicalEntities(text: string): Promise<MedicalEntities> {
+  const prompt = `You are a strict medical Named Entity Recognition (NER) system analyzing a full doctor-patient conversation.
+
+CRITICAL RULES:
+- Read the ENTIRE conversation and extract entities cumulatively across ALL messages
+- Extract ONLY entities that are POSITIVELY confirmed anywhere in the conversation
+- NEGATION is SPECIFIC: "no cough or sore throat" means only cough and sore throat are negated
+  â†’ "body ache" in the SAME sentence is NOT negated and MUST be extracted
+- "the fever subsided after a while" â†’ "after a while" is NOT a duration, skip it
+- DURATION must be a real time reference: "three days", "since morning", "for a week", "yesterday"
+- Do NOT include conversational phrases like "after a", "after a while", "a while" as duration
+- Procedures mentioned by the DOCTOR as recommendations must be extracted (e.g. "CBC", "malaria test")
+- Diseases or diagnoses stated by the doctor must be extracted (e.g. "viral infection")
+- Do NOT hallucinate â€” only extract what is explicitly stated
+- No partial duplicates â€” "three days" not "three" separately
+- Each value must be a meaningful complete medical term or phrase
+
+**Full conversation to analyze:**
+${text}
+
+**Extract cumulatively across the entire conversation:**
+1. SYMPTOMS â€” positively confirmed symptoms from patient (exclude only the specifically negated ones)
+2. MEDICATIONS â€” any drugs/medicines mentioned as taken or prescribed
+3. DISEASES â€” diagnoses or conditions mentioned by doctor or patient
+4. PROCEDURES â€” any test or procedure recommended or mentioned (CBC, blood test, X-ray, malaria test, urine routine, etc.)
+5. BODY_PARTS â€” body parts mentioned in symptom context
+6. SEVERITY â€” severity descriptors (mild, severe, high, slightly high, normal)
+7. DURATION â€” real time references only ("three days", "yesterday", "since morning") â€” NO phrases like "after a", "after a while"
+8. FREQUENCY â€” how often symptoms occur (daily, twice a day, constant, intermittent)
+
+**Negation rule:** "no X or Y" â†’ only X and Y are negated. Other entities in the same sentence are still valid.
+
+Return ONLY valid JSON with no extra text:
+{
+  "symptoms": [],
+  "medications": [],
+  "diseases": [],
+  "procedures": [],
+  "bodyParts": [],
+  "severity": [],
+  "duration": [],
+  "frequency": []
+}`
+
+  try {
+    const response = await groq.chat.completions.create({
+      model: MODELS.FAST,    // â† 8b instead of 70b, good enough for NER
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      response_format: { type: 'json_object' },
+      max_tokens: 500        // â† NER output is small, 500 is plenty
+    })
+    const entities = JSON.parse(response.choices[0].message.content!)
+    return entities as MedicalEntities
+  } catch (error) {
+    console.error('NER extraction failed:', error)
+    return {
+      symptoms: [],
+      medications: [],
+      diseases: [],
+      procedures: [],
+      bodyParts: [],
+      severity: [],
+      duration: [],
+      frequency: []
+    }
+  }
+}
+
+===== C:\Users\Jatin\Desktop\turbos-medifi\lib\pdf\client-generator.ts =====
+// lib/pdf/client-generator.ts
+'use client'
+
+import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
+
+export async function generatePDFClient(elementId: string): Promise<Blob> {
+  const source = document.getElementById(elementId)
+  if (!source) throw new Error(`Element #${elementId} not found`)
+
+  // â”€â”€ 1. Temporarily remove height/overflow constraints on source â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const originalStyle = source.getAttribute('style') || ''
+  source.style.maxHeight = 'none'
+  source.style.height = 'auto'
+  source.style.overflow = 'visible'
+
+  const parents: { el: HTMLElement; overflow: string; maxHeight: string }[] = []
+  let parent = source.parentElement
+  while (parent && parent !== document.body) {
+    const cs = getComputedStyle(parent)
+    if (cs.overflow === 'hidden' || cs.overflowY === 'hidden' || cs.maxHeight !== 'none') {
+      parents.push({ el: parent, overflow: parent.style.overflow, maxHeight: parent.style.maxHeight })
+      parent.style.overflow = 'visible'
+      parent.style.maxHeight = 'none'
+    }
+    parent = parent.parentElement
+  }
+
+  await new Promise(r => setTimeout(r, 200))
+
+  // â”€â”€ 2. Clone and force FULL light theme â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const clone = source.cloneNode(true) as HTMLElement
+  const fullHeight = source.scrollHeight
+
+  clone.style.cssText = `
+    position: fixed;
+    top: -99999px;
+    left: -99999px;
+    width: 780px;
+    min-height: ${fullHeight}px;
+    height: auto;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 40px 52px;
+    background: #ffffff !important;
+    color: #111827 !important;
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 13px;
+    line-height: 1.7;
+    box-sizing: border-box;
+    z-index: -9999;
+  `
+
+  // Aggressively strip ALL inline dark styles and background colors from every element
+  clone.querySelectorAll<HTMLElement>('*').forEach(el => {
+    // Remove all style properties that could cause dark backgrounds
+    const propsToRemove = [
+      'color', 'background', 'background-color', 'border-color',
+      'max-height', 'overflow', 'overflow-y'
+    ]
+    propsToRemove.forEach(p => el.style.removeProperty(p))
+
+    // For elements with inline style containing dark hex colors, nuke the whole style
+    const inlineStyle = el.getAttribute('style') || ''
+    if (
+      inlineStyle.includes('#0') ||  // catches #0A..., #05..., #1A... etc dark hex
+      inlineStyle.includes('#1') ||
+      inlineStyle.includes('rgb(') ||
+      inlineStyle.includes('rgba(')
+    ) {
+      // Keep only safe layout properties
+      const safe = inlineStyle
+        .split(';')
+        .filter(rule => {
+          const prop = rule.split(':')[0]?.trim().toLowerCase()
+          return prop && [
+            'width', 'max-width', 'min-width',
+            'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+            'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+            'font-size', 'font-weight', 'font-family',
+            'text-align', 'text-transform', 'letter-spacing',
+            'border-radius', 'border-left-width', 'border-left-style',
+            'display', 'flex', 'flex-direction', 'align-items',
+            'gap', 'column-span', 'colspan',
+            'border-collapse',
+          ].includes(prop)
+        })
+        .join(';')
+      el.setAttribute('style', safe)
+    }
+  })
+
+  // Inject comprehensive light theme override
+  const lightStyle = document.createElement('style')
+  lightStyle.textContent = `
+    * { 
+      background: transparent !important;
+      background-color: transparent !important;
+      color: #374151 !important;
+      border-color: #d1d5db !important;
+    }
+
+    /* Report wrapper */
+    .rpt-wrap { color: #111827 !important; }
+
+    /* Header */
+    .rpt-header { border-bottom: 2px solid #1a3a5c !important; }
+    .rpt-title { color: #1a3a5c !important; font-size: 18px !important; font-weight: 700 !important; }
+    .rpt-subtitle { color: #6b7280 !important; font-size: 11px !important; }
+
+    /* Info box */
+    .rpt-info-box {
+      background: #eff6ff !important;
+      background-color: #eff6ff !important;
+      border: 1px solid #bfdbfe !important;
+      border-radius: 6px !important;
+      padding: 12px !important;
+    }
+    .rpt-table { border-collapse: collapse !important; width: 100% !important; }
+    .rpt-table td {
+      border: 1px solid #d1d5db !important;
+      padding: 5px 10px !important;
+      background: #ffffff !important;
+      background-color: #ffffff !important;
+    }
+    .rpt-table tr:nth-child(even) td {
+      background: #f9fafb !important;
+      background-color: #f9fafb !important;
+    }
+    .rpt-td-label { color: #4b5563 !important; font-weight: 700 !important; }
+    .rpt-td-value { color: #111827 !important; }
+
+    /* Section titles */
+    .rpt-section-title {
+      font-size: 11px !important;
+      font-weight: 700 !important;
+      letter-spacing: 0.08em !important;
+      text-transform: uppercase !important;
+      padding-left: 10px !important;
+      margin: 0 0 7px 0 !important;
+    }
+    .rpt-section-title--blue  { color: #1d4ed8 !important; border-left: 3px solid #2563eb !important; }
+    .rpt-section-title--green { color: #065f46 !important; border-left: 3px solid #059669 !important; }
+
+    /* Body */
+    .rpt-body { color: #374151 !important; font-size: 12px !important; line-height: 1.75 !important; }
+
+    /* Clinical assessment subheadings â€” colored left border, light bg, NO dark bg */
+    .rpt-assessment-body h3 {
+      font-size: 12px !important;
+      font-weight: 700 !important;
+      margin: 14px 0 5px 0 !important;
+      padding: 5px 10px 5px 12px !important;
+      border-radius: 4px !important;
+      border-left: 3px solid !important;
+    }
+    .rpt-assessment-body h3[data-section="Differential Diagnosis"]     { color: #1d4ed8 !important; background-color: #eff6ff !important; border-color: #2563eb !important; }
+    .rpt-assessment-body h3[data-section="Most Likely Diagnosis"]      { color: #065f46 !important; background-color: #ecfdf5 !important; border-color: #059669 !important; }
+    .rpt-assessment-body h3[data-section="Recommended Investigations"] { color: #92400e !important; background-color: #fffbeb !important; border-color: #f59e0b !important; }
+    .rpt-assessment-body h3[data-section="Treatment Plan"]             { color: #9d174d !important; background-color: #fdf2f8 !important; border-color: #ec4899 !important; }
+    .rpt-assessment-body h3[data-section="Follow-up Recommendations"]  { color: #4c1d95 !important; background-color: #f5f3ff !important; border-color: #8b5cf6 !important; }
+    .rpt-assessment-body h3[data-section="Red Flags"]                  { color: #991b1b !important; background-color: #fef2f2 !important; border-color: #ef4444 !important; }
+
+    .rpt-assessment-body p  { color: #374151 !important; font-size: 12px !important; line-height: 1.75 !important; }
+    .rpt-assessment-body ul, .rpt-assessment-body ol { color: #374151 !important; font-size: 12px !important; }
+    .rpt-assessment-body li { color: #374151 !important; line-height: 1.65 !important; }
+    .rpt-assessment-body strong { color: #111827 !important; font-weight: 700 !important; }
+
+    /* Finance section headings */
+    .rpt-fin-heading {
+      font-size: 12px !important;
+      font-weight: 700 !important;
+      padding: 5px 10px 5px 12px !important;
+      border-radius: 4px !important;
+      border-left: 3px solid !important;
+      margin: 14px 0 6px 0 !important;
+    }
+    [data-fin="clientGoals"]     { color: #065f46 !important; background-color: #ecfdf5 !important; border-color: #059669 !important; }
+    [data-fin="recommendations"] { color: #1d4ed8 !important; background-color: #eff6ff !important; border-color: #2563eb !important; }
+    [data-fin="taxOptimization"] { color: #92400e !important; background-color: #fffbeb !important; border-color: #f59e0b !important; }
+    [data-fin="actionItems"]     { color: #4c1d95 !important; background-color: #f5f3ff !important; border-color: #8b5cf6 !important; }
+
+    /* Lists */
+    ul, ol { padding-left: 20px !important; margin: 4px 0 8px 0 !important; }
+    li { color: #374151 !important; margin-bottom: 4px !important; line-height: 1.65 !important; }
+    strong, b { color: #111827 !important; font-weight: 700 !important; }
+
+    /* Footer */
+    .rpt-footer { color: #9ca3af !important; border-top: 1px solid #e5e7eb !important; }
+  `
+  clone.appendChild(lightStyle)
+  document.body.appendChild(clone)
+
+  try {
+    await new Promise(r => setTimeout(r, 500))
+
+    const cloneHeight = clone.scrollHeight
+
+    const canvas = await html2canvas(clone, {
+      scale: 2.5,
+      useCORS: true,
+      logging: false,
+      backgroundColor: '#ffffff',
+      width: 780,
+      height: cloneHeight,
+      windowWidth: 780,
+      windowHeight: cloneHeight,
+      scrollX: 0,
+      scrollY: 0,
+      onclone: (doc) => {
+        // Final pass: nuke any remaining dark backgrounds in the cloned document
+        doc.querySelectorAll<HTMLElement>('*').forEach(el => {
+          const cs = window.getComputedStyle(el)
+          const bg = cs.backgroundColor
+          // If background is dark (not white/transparent), override it
+          if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+            const rgb = bg.match(/\d+/g)?.map(Number) || [255, 255, 255]
+            const brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
+            if (brightness < 128) {
+              el.style.setProperty('background-color', 'transparent', 'important')
+            }
+          }
+        })
+      }
+    })
+
+    // Build multi-page A4 PDF
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true })
+
+    const A4_W_MM = 210
+    const A4_H_MM = 297
+    const MARGIN_MM = 12
+    const contentW_MM = A4_W_MM - MARGIN_MM * 2
+    const pxPerMM = canvas.width / contentW_MM
+    const totalHeightMM = canvas.height / pxPerMM
+    const pageContentH_MM = A4_H_MM - MARGIN_MM * 2
+
+    let yMM = 0
+    let firstPage = true
+
+    while (yMM < totalHeightMM) {
+      if (!firstPage) pdf.addPage()
+
+      const sliceH_MM = Math.min(pageContentH_MM, totalHeightMM - yMM)
+      const srcY_px = Math.round(yMM * pxPerMM)
+      const srcH_px = Math.round(sliceH_MM * pxPerMM)
+
+      const pageCanvas = document.createElement('canvas')
+      pageCanvas.width = canvas.width
+      pageCanvas.height = srcH_px
+      const ctx = pageCanvas.getContext('2d')!
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+      ctx.drawImage(canvas, 0, srcY_px, canvas.width, srcH_px, 0, 0, canvas.width, srcH_px)
+
+      const imgData = pageCanvas.toDataURL('image/jpeg', 0.97)
+      pdf.addImage(imgData, 'JPEG', MARGIN_MM, MARGIN_MM, contentW_MM, sliceH_MM)
+
+      yMM += pageContentH_MM
+      firstPage = false
+    }
+
+    return pdf.output('blob')
+
+  } finally {
+    source.setAttribute('style', originalStyle)
+    parents.forEach(({ el, overflow, maxHeight }) => {
+      el.style.overflow = overflow
+      el.style.maxHeight = maxHeight
+    })
+    if (document.body.contains(clone)) document.body.removeChild(clone)
+  }
+}
+

@@ -1,0 +1,209 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  DOCTOR
+  FINANCE_AGENT
+  ADMIN
+}
+
+enum Domain {
+  HEALTHCARE
+  FINANCE
+}
+
+enum Department {
+  GENERAL_MEDICINE
+  CARDIOLOGY
+  ORTHOPEDICS
+  PEDIATRICS
+  GYNECOLOGY
+  DERMATOLOGY
+  TAXATION
+  INVESTMENT
+  INSURANCE
+  LOANS
+}
+
+enum Language {
+  ENGLISH
+  HINDI
+  KANNADA
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum SessionMode {
+  SINGLE
+  MULTI
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  CREATE_SESSION
+  UPDATE_SESSION
+  APPROVE_REPORT
+  EXPORT_PDF
+  UPDATE_CONFIG
+  CREATE_USER
+  DELETE_USER
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  name         String
+  role         Role
+  password     String
+  department   Department?
+  isActive     Boolean       @default(true)
+  lastLogin    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  sessions     Session[]
+  auditLogs    AuditLog[]
+  appointments Appointment[]
+}
+
+model Person {
+  id           String        @id @default(cuid())
+  phone        String        @unique
+  name         String?
+  email        String?
+  age          Int?
+  gender       String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  sessions     Session[]
+  appointments Appointment[]
+}
+
+model Session {
+  id             String        @id @default(cuid())
+  personId       String
+  person         Person        @relation(fields: [personId], references: [id])
+  userId         String
+  user           User          @relation(fields: [userId], references: [id])
+  domain         Domain
+  department     Department
+  language       Language      @default(ENGLISH)
+  status         SessionStatus @default(ACTIVE)
+  sessionMode    SessionMode   @default(MULTI)
+  transcript     String?       @db.Text
+  translatedText String?       @db.Text
+  extractedData  Json?
+  nerEntities      Json?
+  finalReport      String?       @db.Text
+  smartSummary     Json?
+  smartSummaryHash String?
+  approved         Boolean       @default(false)
+  approvedAt       DateTime?
+  approvedBy       String?
+  duration         Int?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  interactions     Interaction[]
+  exports          Export[]
+  appointments     Appointment[]
+}
+
+model Interaction {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  speaker     String
+  audioUrl    String?
+  text        String   @db.Text
+  translated  String?  @db.Text
+  hindiText   String?  @db.Text
+  kannadaText String?  @db.Text
+  timestamp   DateTime @default(now())
+}
+
+model Config {
+  id         String     @id @default(cuid())
+  domain     Domain
+  department Department
+  schema     Json
+  prompts    Json
+  template   String     @db.Text
+  isActive   Boolean    @default(true)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([domain, department])
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id])
+  action    AuditAction
+  resource  String?
+  details   Json?
+  ipAddress String?
+  userAgent String?
+  timestamp DateTime    @default(now())
+
+  @@index([userId, timestamp])
+  @@index([action, timestamp])
+}
+
+model Export {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id])
+  format    String
+  fileUrl   String
+  createdAt DateTime @default(now())
+}
+
+model Analytics {
+  id                String     @id @default(cuid())
+  date              DateTime   @db.Date
+  domain            Domain
+  department        Department
+  totalSessions     Int        @default(0)
+  completedSessions Int        @default(0)
+  avgDuration       Float?
+  totalPatients     Int        @default(0)
+  reportsGenerated  Int        @default(0)
+
+  @@unique([date, domain, department])
+  @@index([date])
+}
+
+model Appointment {
+  id              String   @id @default(cuid())
+  sessionId       String
+  personId        String
+  userId          String
+  appointmentDate DateTime
+  notes           String?
+  twilioCallSid   String?
+  callStatus      String?  @default("initiated")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  callFired       Boolean  @default(false)
+  customScript    String?
+  session         Session  @relation(fields: [sessionId], references: [id])
+  person          Person   @relation(fields: [personId], references: [id])
+  user            User     @relation(fields: [userId], references: [id])
+}
