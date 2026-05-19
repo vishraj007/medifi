@@ -18,7 +18,6 @@ export async function POST(req: NextRequest) {
       transcript,
     } = await req.json()
 
-    // Hash the person's name for privacy
     const hashedPersonName = personName ? hashName(personName) : 'the patient'
 
     if (!domain) {
@@ -40,7 +39,6 @@ export async function POST(req: NextRequest) {
         : '',
     ].filter(Boolean).join('\n\n')
 
-    // ── Check cache ────────────────────────────────────────────────────────
     const hashInput = transcript + JSON.stringify(extractedData || {}) + JSON.stringify(nerEntities || {})
     const currentHash = crypto.createHash('sha256').update(hashInput).digest('hex')
 
@@ -52,7 +50,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Healthcare prompt — Kannada FIRST so it never gets cut off ─────────
     const healthcarePrompt = `You are a compassionate doctor's assistant. Based on the consultation data below, write a simple, clear patient summary that ANY person can understand — even someone with no medical education.
 
 Patient: ${hashedPersonName}
@@ -94,7 +91,6 @@ Return JSON only with these EXACT keys in this EXACT order:
   }
 }`
 
-    // ── Finance prompt — Kannada FIRST ────────────────────────────────────
     const financePrompt = `You are a friendly financial advisor's assistant. Based on the consultation data below, write a simple, clear client summary that ANY person can understand — no finance jargon allowed.
 
 Client: ${hashedPersonName}
@@ -136,15 +132,15 @@ Return JSON only with these EXACT keys in this EXACT order:
   }
 }`
 
-    // ── Call Groq with fallback on 429 ────────────────────────────────────
+    // ── Fix: pass false to disable streaming so .choices[0] exists ────────
     const response = await groqWithFallback(
       {
         messages: [{ role: 'user', content: isHealthcare ? healthcarePrompt : financePrompt }],
         temperature: 0.4,
         response_format: { type: 'json_object' },
-        max_tokens: 3000, // ← increased back: Kannada script needs more tokens than Latin
+        max_tokens: 3000,
       },
-      true
+      false  // ← was `true` (streaming), changed to `false` (non-streaming)
     )
 
     let summary: any = {}
