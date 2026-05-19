@@ -1,6 +1,7 @@
 // lib/groq.ts
 
 import Groq from 'groq-sdk'
+import type { ChatCompletion, ChatCompletionCreateParamsNonStreaming } from 'groq-sdk/resources/chat/completions'
 
 export const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY
@@ -26,12 +27,13 @@ export const MODELS = {
 
 /**
  * Call Groq with automatic model fallback on 429 rate limit.
+ * Always non-streaming — returns a full ChatCompletion with .choices populated.
  * Tries SMART first, then each model in FALLBACKS.
  */
 export async function groqWithFallback(
-  params: Omit<Parameters<typeof groq.chat.completions.create>[0], 'model'>,
+  params: Omit<ChatCompletionCreateParamsNonStreaming, 'model'>,
   preferSmart = true
-): Promise<Awaited<ReturnType<typeof groq.chat.completions.create>>> {
+): Promise<ChatCompletion> {
   const modelsToTry = preferSmart
     ? [MODELS.SMART, ...MODELS.FALLBACKS]
     : [MODELS.FAST, ...MODELS.FALLBACKS]
@@ -40,8 +42,12 @@ export async function groqWithFallback(
   for (const model of modelsToTry) {
     try {
       console.log(`Trying Groq model: ${model}`)
-      const response = await groq.chat.completions.create({ ...params, model })
-      return response
+      const response = await groq.chat.completions.create({
+        ...params,
+        model,
+        stream: false, // explicitly force non-streaming so TS resolves to ChatCompletion
+      })
+      return response as ChatCompletion
     } catch (err: any) {
       if (err?.status === 429) {
         console.warn(`Rate limited on ${model}, trying next fallback...`)
