@@ -36,16 +36,14 @@ export async function POST(req: NextRequest) {
     const requestBody = {
       inputs: [truncated],
       target_language_code: targetLang,
-      speaker: 'anushka',      // ✅ Valid bulbul:v2 speaker (meera/rupali were v1 only)
-      pitch: 0,
+      speaker: 'ritu',
       pace: 1.0,
-      loudness: 1.5,
       speech_sample_rate: 22050,
       enable_preprocessing: true,
-      model: 'bulbul:v2'
+      model: 'bulbul:v3'
     }
 
-    console.log(`TTS → bulbul:v2 | speaker=anushka | lang=${targetLang} | chars=${truncated.length}`)
+    console.log(`TTS → bulbul:v3 | speaker=ritu | lang=${targetLang} | chars=${truncated.length}`)
 
     const response = await fetch(`${SARVAM_BASE_URL}/text-to-speech`, {
       method: 'POST',

@@ -1,5 +1,5 @@
 // lib/sarvam.ts
-// bulbul:v2 valid speakers: anushka, abhilash, manisha, vidya, arya, karun, hitesh
+// bulbul:v3 valid speakers: anushka, abhilash, manisha, vidya, arya, karun, hitesh
 // meera/rupali are bulbul:v1 only — do NOT use with v2
 
 export class SarvamClient {
@@ -66,7 +66,7 @@ export class SarvamClient {
     return data.translated_text || text
   }
 
-  // Text to Speech — bulbul:v2
+  // Text to Speech — bulbul:v3
   // Valid speakers: anushka (f), abhilash (m), manisha (f), vidya (f), arya (f), karun (m), hitesh (m)
   async textToSpeech(
     text: string,
@@ -84,13 +84,11 @@ export class SarvamClient {
       body: JSON.stringify({
         inputs: [truncated],
         target_language_code: language,
-        speaker: options?.speaker || 'anushka',  // ✅ valid v2 speaker
-        pitch: options?.pitch ?? 0,
+        speaker: options?.speaker || 'ritu',
         pace: options?.pace ?? 1.0,
-        loudness: options?.loudness ?? 1.5,
         speech_sample_rate: 22050,
         enable_preprocessing: true,
-        model: 'bulbul:v2'
+        model: 'bulbul:v3'
       })
     })
 

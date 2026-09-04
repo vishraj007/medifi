@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { sarvam } from '@/lib/sarvam'
-import { groq, MODELS } from '@/lib/groq'
+import { groqWithFallback } from '@/lib/groq'
 
 const LANG_CODE: Record<string, string> = {
   HINDI:   'hi-IN',
@@ -89,12 +89,11 @@ CRITICAL RULES:
 HTML to translate:
 ${html}`
 
-  const response = await groq.chat.completions.create({
-    model: MODELS.SMART,
+  const response = await groqWithFallback({
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.2,
     max_tokens: 8000,
-  })
+  }, true)
 
   let translatedHtml = response.choices[0].message.content!.trim()
   translatedHtml = translatedHtml

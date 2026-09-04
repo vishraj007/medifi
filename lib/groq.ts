@@ -8,25 +8,26 @@ export const groq = new Groq({
 })
 
 export const MODELS = {
-  // Use 8b for NER and light tasks — much cheaper on TPD
-  FAST: 'llama-3.1-8b-instant',
+  // Use compound-mini for NER and light tasks — fast & efficient
+  FAST: 'groq/compound-mini',
 
-  // Use for summaries and complex reasoning
-  SMART: 'llama-3.3-70b-versatile',
+  // Use compound for summaries, extraction, and complex reasoning
+  SMART: 'groq/compound',
 
-  // Fallback chain when rate limited
+  // Fallback chain across active Groq models
   FALLBACKS: [
-    'llama-3.1-8b-instant',   // cheapest, fastest
-    'gemma2-9b-it',           // Google's model, separate quota
-    'mixtral-8x7b-32768',     // Mistral, separate quota
+    'groq/compound',
+    'groq/compound-mini',
+    'qwen/qwen3.6-27b',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
   ],
 
-  MIXTRAL: 'mixtral-8x7b-32768',
-  SMALL: 'gemma2-9b-it',
+  SMALL: 'groq/compound-mini',
 }
 
 /**
- * Call Groq with automatic model fallback on 429 rate limit.
+ * Call Groq with automatic model fallback on 404 / 429 / 400 errors.
  * Always non-streaming — returns a full ChatCompletion with .choices populated.
  * Tries SMART first, then each model in FALLBACKS.
  */
@@ -38,8 +39,10 @@ export async function groqWithFallback(
     ? [MODELS.SMART, ...MODELS.FALLBACKS]
     : [MODELS.FAST, ...MODELS.FALLBACKS]
 
+  const uniqueModels = Array.from(new Set(modelsToTry))
+
   let lastError: any
-  for (const model of modelsToTry) {
+  for (const model of uniqueModels) {
     try {
       console.log(`Trying Groq model: ${model}`)
       const response = await groq.chat.completions.create({
@@ -49,12 +52,27 @@ export async function groqWithFallback(
       })
       return response as ChatCompletion
     } catch (err: any) {
-      if (err?.status === 429) {
-        console.warn(`Rate limited on ${model}, trying next fallback...`)
-        lastError = err
-        continue
+      console.warn(`Groq model ${model} failed (${err?.status || err?.message}), attempting fallback...`)
+      lastError = err
+
+      // If failed with 400 and response_format was set (e.g. gemma2 or model without json_object support), retry without response_format
+      if (err?.status === 400 && params.response_format) {
+        try {
+          console.log(`Retrying Groq model ${model} without response_format...`)
+          const { response_format, ...paramsWithoutFormat } = params
+          const response = await groq.chat.completions.create({
+            ...paramsWithoutFormat,
+            model,
+            stream: false,
+          })
+          return response as ChatCompletion
+        } catch (retryErr: any) {
+          console.warn(`Retry without response_format on ${model} also failed: ${retryErr?.message}`)
+          lastError = retryErr
+        }
       }
-      throw err // non-429 errors bubble up immediately
+
+      continue
     }
   }
   throw lastError // all models exhausted

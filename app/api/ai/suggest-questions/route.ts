@@ -1,7 +1,7 @@
 // app/api/ai/suggest-questions/route.ts
 
 import { NextRequest, NextResponse } from 'next/server'
-import { groq, MODELS } from '@/lib/groq'
+import { groqWithFallback } from '@/lib/groq'
 
 export async function POST(req: NextRequest) {
   try {
@@ -95,12 +95,11 @@ ${pastSessionContext?.sessionCount > 0 ? '5. Follow up on financial matters from
 Return ONLY a JSON object: { "questions": ["question1", "question2", ...] }
 ${pastSessionContext?.sessionCount > 0 ? '\nQuestions should reference past financial history when relevant.' : ''}`
 
-    const response = await groq.chat.completions.create({
-      model: MODELS.SMART,
+    const response = await groqWithFallback({
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.7,
       response_format: { type: 'json_object' }
-    })
+    }, true)
 
     const result = JSON.parse(response.choices[0].message.content!)
 

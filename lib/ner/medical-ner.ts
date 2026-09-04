@@ -1,6 +1,6 @@
 // lib/ner/medical-ner.ts
 
-import { groq, MODELS } from '@/lib/groq'
+import { groqWithFallback } from '@/lib/groq'
 
 export interface MedicalEntities {
   symptoms: string[]
@@ -58,13 +58,12 @@ Return ONLY valid JSON with no extra text:
 }`
 
   try {
-    const response = await groq.chat.completions.create({
-      model: MODELS.FAST,    // ← 8b instead of 70b, good enough for NER
+    const response = await groqWithFallback({
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
       response_format: { type: 'json_object' },
-      max_tokens: 500        // ← NER output is small, 500 is plenty
-    })
+      max_tokens: 500
+    }, false)
     const entities = JSON.parse(response.choices[0].message.content!)
     return entities as MedicalEntities
   } catch (error) {

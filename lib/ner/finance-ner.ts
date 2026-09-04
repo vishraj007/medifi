@@ -1,6 +1,6 @@
 // lib/ner/finance-ner.ts
 
-import { groq, MODELS } from '@/lib/groq'
+import { groqWithFallback } from '@/lib/groq'
 
 export interface FinanceEntities {
   income: string[]
@@ -54,16 +54,15 @@ Return ONLY valid JSON:
   "amounts": [],
   "timeframes": [],
   "taxSections": []
-}`
+} `
 
   try {
-    const response = await groq.chat.completions.create({
-      model: MODELS.SMART,
+    const response = await groqWithFallback({
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.1,
       response_format: { type: 'json_object' },
       max_tokens: 1000
-    })
+    }, true)
 
     const entities = JSON.parse(response.choices[0].message.content!)
     return entities as FinanceEntities

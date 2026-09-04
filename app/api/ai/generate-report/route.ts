@@ -1,7 +1,7 @@
 // app/api/ai/generate-report/route.ts
 
 import { NextRequest, NextResponse } from 'next/server'
-import { groq, MODELS } from '@/lib/groq'
+import { groqWithFallback } from '@/lib/groq'
 import { extractMedicalEntities } from '@/lib/ner/medical-ner'
 import { hashPII } from '@/lib/hash-pii'
 
@@ -114,13 +114,12 @@ Return JSON only:
   }
 }`
 
-        const structuredResponse = await groq.chat.completions.create({
-          model: MODELS.SMART,
+        const structuredResponse = await groqWithFallback({
           messages: [{ role: 'user', content: structuredPrompt }],
           temperature: 0.1,
           response_format: { type: 'json_object' },
           max_tokens: 1500
-        })
+        }, true)
 
         let sd: any = {}
         try {
@@ -172,12 +171,11 @@ Example for Kannada:
 <p>ರೋಗಿಗೆ Paracetamol 500mg ಔಷಧಿಯನ್ನು ಶಿಫಾರಸು ಮಾಡಲಾಗಿದೆ.</p>
 <ul><li>Paracetamol 500mg - ದಿನಕ್ಕೆ ಮೂರು ಬಾರಿ</li></ul>` : ''}`
 
-        const assessmentResponse = await groq.chat.completions.create({
-          model: MODELS.SMART,
+        const assessmentResponse = await groqWithFallback({
           messages: [{ role: 'user', content: assessmentPrompt }],
           temperature: 0.4,
           max_tokens: 2000
-        })
+        }, true)
 
         let assessmentHtml = assessmentResponse.choices[0].message.content!
           .replace(/```html/gi, '').replace(/```/g, '').trim()
@@ -397,13 +395,12 @@ Return JSON only:
   "summary": "2-3 sentence executive summary${language !== 'ENGLISH' ? ` in ${finLangName}` : ''}"
 }`
 
-        const financeResponse = await groq.chat.completions.create({
-          model: MODELS.SMART,
+        const financeResponse = await groqWithFallback({
           messages: [{ role: 'user', content: financePrompt }],
           temperature: 0.3,
           response_format: { type: 'json_object' },
           max_tokens: 3000
-        })
+        }, true)
 
         let fd: any = {}
         try { fd = JSON.parse(financeResponse.choices[0].message.content!) }
@@ -446,12 +443,11 @@ Financial terms may stay in English but wrap them in a ${finTargetLangName} sent
 
 Be thorough and specific. Reference actual numbers discussed. Provide actionable insights.`
 
-        const analysisResponse = await groq.chat.completions.create({
-          model: MODELS.SMART,
+        const analysisResponse = await groqWithFallback({
           messages: [{ role: 'user', content: analysisPrompt }],
           temperature: 0.4,
           max_tokens: 2500
-        })
+        }, true)
 
         let analysisHtml = analysisResponse.choices[0].message.content!
           .replace(/```html/gi, '').replace(/```/g, '').trim()
